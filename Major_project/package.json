@@ -24,7 +24,7 @@
     "main.js",
     "package.json"
   ],
-  "win": {
+  "win": {  
     "target": "nsis",
     "forceCodeSigning": false  
   }

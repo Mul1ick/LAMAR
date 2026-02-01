@@ -13,7 +13,7 @@ const QueryInput = ({ onSubmit }) => {
 
   return (
     <div className="query-input-container">
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={handleSubmit} className="query-form">
         <div className="input-wrapper">
           <input
             type="text"
@@ -26,6 +26,7 @@ const QueryInput = ({ onSubmit }) => {
             type="submit"
             className="send-button"
             disabled={!query.trim()}
+            title="Send message (Enter)"
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="22" y1="2" x2="11" y2="13"></line>
