@@ -1,0 +1,10 @@
+| Metric Category | Metric | Value | CI_low | CI_high | Baseline | Baseline_Value |
+| --- | --- | --- | --- | --- | --- | --- |
+| Retrieval | MRR | 0.4444444444444444 | 0.0 | 1.0 | Random | 0.34 |
+| Parsing | Chunk-F1 (avg) | 0.6444444444444444 | 0.6 | 0.6666666666666666 | Sentence-split | 1.0 |
+| Clustering | Silhouette | -0.013333943839827994 | - | - | Random labels | -0.01412358008907291 |
+| Clustering | Adjusted Rand | nan | - | - | Random labels | nan |
+| Pipeline | Overall Run Success Rate | 0.5 | - | - | N/A | nan |
+| Summarization | ROUGE-1 | 0.6857142857142857 | - | - | Random hyps | 0.43380952380952387 |
+| Summarization | ROUGE-2 | 0.3974358974358974 | - | - | Random hyps | 0.2146153846153846 |
+| Summarization | ROUGE-L | 0.6857142857142857 | - | - | Random hyps | 0.43380952380952387 |
