@@ -15,6 +15,8 @@ class DoclamarState(TypedDict):
     reranked_chunks: Optional[List[Dict]]
     final_answer: Optional[str]
     source_files: Optional[List[str]]
+    citations: Optional[List[Dict]]
+    search_stats: Optional[Dict[str, Any]]
     evaluation: Optional[Dict[str, Any]]
     error: Optional[str]
     retry_count: Annotated[int, operator.add]

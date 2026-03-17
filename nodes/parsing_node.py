@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import re
 import time
 import logging
 from pathlib import Path
@@ -12,33 +13,34 @@ from utils.json_utils import extract_json
 
 logger = logging.getLogger(__name__)
 
-CHUNK_SIZE = 600
-CHUNK_OVERLAP = 100
+CHUNK_SIZE    = 1500
+CHUNK_OVERLAP = 300
+
+SECTION_PATTERNS = [
+    r"^(#{1,4}\s+.+)$",
+    r"^(\d+\.\s+[A-Z][A-Z\s]+)$",
+    r"^([A-Z][A-Z\s]{3,})$",
+    r"^(Abstract|Introduction|Background|Methodology|Method|Results|Discussion|Conclusion|References|Acknowledgements?|Related Work|Experiments?|Evaluation|Future Work|Summary)\b",
+]
+_section_re = re.compile("|".join(SECTION_PATTERNS), re.IGNORECASE | re.MULTILINE)
 
 
 def _plan_parse(query: str, doc: DocumentSchema) -> Dict[str, Any]:
     llm = get_llm()
-    prompt = f"""You are a document parsing planner.
-
-Query: "{query}"
-Document: {doc.file_name} ({doc.file_type}, {doc.size_kb} KB)
-
-Return JSON:
-{{
-  "parse_full": true,
-  "max_chars": 15000,
-  "reason": "brief reason"
-}}
-
-Rules: if size > 500KB set parse_full false with max_chars 8000, else parse_full true."""
-
+    prompt = (
+        f'Query: "{query}"\n'
+        f"Document: {doc.file_name} ({doc.file_type}, {doc.size_kb} KB)\n\n"
+        'Return JSON:\n'
+        '{"parse_full": true, "max_chars": 50000, "reason": "brief reason"}\n\n'
+        "Rules: parse_full true unless file > 1000KB. max_chars >= 20000 for academic papers."
+    )
     try:
         raw = llm.generate_json(prompt)
         data = extract_json(raw)
         assert isinstance(data.get("parse_full"), bool)
         return data
     except Exception:
-        return {"parse_full": True, "max_chars": 15000, "reason": "Fallback: full parse."}
+        return {"parse_full": True, "max_chars": 50000, "reason": "Fallback: full parse."}
 
 
 def _read_pdf(path: str, max_chars: int, parse_full: bool) -> str:
@@ -47,7 +49,8 @@ def _read_pdf(path: str, max_chars: int, parse_full: bool) -> str:
     with open(path, "rb") as fh:
         reader = pypdf.PdfReader(fh)
         for page in reader.pages:
-            text += (page.extract_text() or "")
+            page_text = page.extract_text() or ""
+            text += page_text + "\n"
             if not parse_full and len(text) >= max_chars:
                 break
     return text.strip()
@@ -82,25 +85,68 @@ def _read_document(doc: DocumentSchema, parse_full: bool, max_chars: int) -> str
         return ""
 
 
+def _split_sections(text: str) -> List[tuple]:
+    matches = list(_section_re.finditer(text))
+    if len(matches) < 2:
+        return []
+
+    sections = []
+    for i, match in enumerate(matches):
+        start = match.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        heading = match.group(0).strip()
+        body = text[start:end].strip()
+        if body:
+            sections.append((heading, body))
+    return sections
+
+
 def _chunk_text(text: str, doc: DocumentSchema) -> List[ParsedChunkSchema]:
     chunks = []
-    stride = CHUNK_SIZE - CHUNK_OVERLAP
-    idx = 0
-    for i in range(0, len(text), stride):
-        chunk_text = text[i: i + CHUNK_SIZE].strip()
-        if not chunk_text:
-            continue
-        chunks.append(ParsedChunkSchema(
-            content=chunk_text,
-            metadata={
-                "file_path": doc.file_path,
-                "file_name": doc.file_name,
-                "file_type": doc.file_type,
-                "chunk_index": str(idx),
-                "chunk_start": str(i),
-            }
-        ))
-        idx += 1
+    meta_base = {
+        "file_path": doc.file_path,
+        "file_name": doc.file_name,
+        "file_type": doc.file_type,
+    }
+
+    sections = _split_sections(text)
+
+    if sections:
+        idx = 0
+        for heading, body in sections:
+            if len(body) <= CHUNK_SIZE:
+                chunks.append(ParsedChunkSchema(
+                    content=body,
+                    metadata={**meta_base, "chunk_index": str(idx), "section": heading}
+                ))
+                idx += 1
+            else:
+                stride = CHUNK_SIZE - CHUNK_OVERLAP
+                for i in range(0, len(body), stride):
+                    chunk_text = body[i: i + CHUNK_SIZE].strip()
+                    if not chunk_text:
+                        continue
+                    chunks.append(ParsedChunkSchema(
+                        content=chunk_text,
+                        metadata={**meta_base, "chunk_index": str(idx),
+                                  "section": heading, "chunk_start": str(i)}
+                    ))
+                    idx += 1
+        logger.info(f"[ParsingNode] Section-aware chunking: {len(sections)} sections → {len(chunks)} chunks")
+    else:
+        stride = CHUNK_SIZE - CHUNK_OVERLAP
+        idx = 0
+        for i in range(0, len(text), stride):
+            chunk_text = text[i: i + CHUNK_SIZE].strip()
+            if not chunk_text:
+                continue
+            chunks.append(ParsedChunkSchema(
+                content=chunk_text,
+                metadata={**meta_base, "chunk_index": str(idx), "chunk_start": str(i)}
+            ))
+            idx += 1
+        logger.info(f"[ParsingNode] Sliding window chunking → {len(chunks)} chunks")
+
     return chunks
 
 

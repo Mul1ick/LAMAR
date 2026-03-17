@@ -10,11 +10,10 @@ from nodes.replan_node import replan_node
 
 
 def _after_routing(state: DoclamarState) -> str:
-    if state.get("error") and not state.get("candidate_documents"):
-        return "replan_node"
-    if not state.get("candidate_documents"):
-        return END
-    return "parsing_node"
+    docs = state.get("candidate_documents")
+    if docs:
+        return "parsing_node"
+    return "replan_node"
 
 
 def _after_reranking(state: DoclamarState) -> str:
@@ -24,7 +23,9 @@ def _after_reranking(state: DoclamarState) -> str:
 
 
 def _after_replan(state: DoclamarState) -> str:
-    if state.get("retry_count", 0) >= 2:
+    if state.get("candidate_documents"):
+        return "parsing_node"
+    if state.get("retry_count", 0) >= 3:
         return END
     return "routing_node"
 
@@ -32,21 +33,21 @@ def _after_replan(state: DoclamarState) -> str:
 def build_graph():
     workflow = StateGraph(DoclamarState)
 
-    workflow.add_node("routing_node", routing_node)
-    workflow.add_node("parsing_node", parsing_node)
-    workflow.add_node("retrieval_node", retrieval_node)
-    workflow.add_node("reranking_node", reranking_node)
+    workflow.add_node("routing_node",      routing_node)
+    workflow.add_node("parsing_node",      parsing_node)
+    workflow.add_node("retrieval_node",    retrieval_node)
+    workflow.add_node("reranking_node",    reranking_node)
     workflow.add_node("summarization_node", summarization_node)
-    workflow.add_node("replan_node", replan_node)
+    workflow.add_node("replan_node",       replan_node)
 
     workflow.set_entry_point("routing_node")
 
     workflow.add_conditional_edges(
         "routing_node",
         _after_routing,
-        {"parsing_node": "parsing_node", "replan_node": "replan_node", END: END}
+        {"parsing_node": "parsing_node", "replan_node": "replan_node"}
     )
-    workflow.add_edge("parsing_node", "retrieval_node")
+    workflow.add_edge("parsing_node",   "retrieval_node")
     workflow.add_edge("retrieval_node", "reranking_node")
     workflow.add_conditional_edges(
         "reranking_node",
@@ -57,7 +58,7 @@ def build_graph():
     workflow.add_conditional_edges(
         "replan_node",
         _after_replan,
-        {"routing_node": "routing_node", END: END}
+        {"parsing_node": "parsing_node", "routing_node": "routing_node", END: END}
     )
 
     return workflow.compile()

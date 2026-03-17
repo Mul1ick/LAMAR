@@ -16,7 +16,7 @@ from utils.json_utils import extract_json
 
 logger = logging.getLogger(__name__)
 
-MIN_SCORE_THRESHOLD = 0.10
+MIN_SCORE_THRESHOLD = 0.0
 ALPHA = 0.6
 BETA = 0.4
 
@@ -66,31 +66,41 @@ def _bm25_scores(query: str, chunks: List[ParsedChunkSchema], k1: float = 1.5, b
 
 def _llm_judge(query: str, chunks: List[ParsedChunkSchema], top_n: int = 10) -> List[float]:
     llm = get_llm()
-    candidates = chunks[:top_n]
+    actual_n = min(top_n, len(chunks))
+    candidates = chunks[:actual_n]
+
     numbered = "\n\n".join(
-        f"[{i}] {c.content[:300]}" for i, c in enumerate(candidates)
+        f"[{i}] {c.content[:250]}" for i, c in enumerate(candidates)
     )
-    prompt = f"""You are a relevance judge for a document retrieval system.
 
-Query: "{query}"
-
-Candidate chunks:
-{numbered}
-
-Rate each chunk's relevance to the query on a scale of 0.0 to 1.0.
-Return JSON: {{"scores": [0.9, 0.3, ...]}}
-Scores must match the number of chunks exactly."""
+    prompt = (
+        f'Query: "{query}"\n\n'
+        f"Rate each of the {actual_n} chunks below for relevance (0.0 to 1.0).\n"
+        f"You MUST return exactly {actual_n} scores.\n\n"
+        f"{numbered}\n\n"
+        f'Return ONLY: {{"scores": [s0, s1, ..., s{actual_n - 1}]}}'
+    )
 
     try:
         raw = llm.generate_json(prompt)
         data = extract_json(raw)
         scores = data.get("scores", [])
-        if len(scores) != len(candidates):
-            raise ValueError("Score count mismatch")
-        padded = list(scores) + [0.0] * (len(chunks) - len(candidates))
-        return [float(s) for s in padded]
+
+        if not isinstance(scores, list):
+            raise ValueError("scores is not a list")
+
+        scores = [float(s) for s in scores]
+
+        if len(scores) > actual_n:
+            scores = scores[:actual_n]
+        elif len(scores) < actual_n:
+            scores = scores + [0.5] * (actual_n - len(scores))
+
+        padded = scores + [0.0] * (len(chunks) - actual_n)
+        return padded
+
     except Exception as e:
-        logger.warning(f"[RerankNode] LLM judge failed: {e}. Skipping judge.")
+        logger.warning(f"[RerankNode] LLM judge failed: {e}. Using neutral scores.")
         return [0.5] * len(chunks)
 
 
@@ -107,13 +117,13 @@ def reranking_node(state: DoclamarState) -> DoclamarState:
     top_k = state.get("top_k", 5)
 
     try:
-        cosine = _cosine_scores(query, chunks)
-        bm25 = _bm25_scores(query, chunks)
-        llm_scores = _llm_judge(query, chunks, top_n=min(10, len(chunks)))
+        cosine  = _cosine_scores(query, chunks)
+        bm25    = _bm25_scores(query, chunks)
+        llm_sc  = _llm_judge(query, chunks, top_n=min(10, len(chunks)))
 
         hybrid = [
             ALPHA * c + BETA * b + 0.1 * l
-            for c, b, l in zip(cosine, bm25, llm_scores)
+            for c, b, l in zip(cosine, bm25, llm_sc)
         ]
 
         scored = sorted(zip(hybrid, chunks), key=lambda x: x[0], reverse=True)
