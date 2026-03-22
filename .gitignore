@@ -1,1 +1,7 @@
-/Major_project/node_modules
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Specifically for your case
+doclamar/venv/
