@@ -80,10 +80,11 @@ Document Excerpts:
 {context}
 
 Instructions:
+- Use clear paragraphs and bullet points to make the summary highly readable.
 - Answer precisely and cite every claim with its reference number inline e.g. "Machine learning is a subset of AI [1]."
-- If multiple sources support a claim, cite all of them e.g. [1][3]
-- Synthesize across sources where relevant
-- End with a "References" section listing each [N] → filename
+- If multiple sources support a claim, cite all of them e.g. [1][3].
+- Synthesize across sources where relevant.
+- End with a "References" section, listing each [N] → filename on a brand new line.
 
 Answer:"""
 
