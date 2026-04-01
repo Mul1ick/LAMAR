@@ -706,3 +706,18 @@ body {
   padding: 2rem 1rem;
   font-size: 0.9rem;
 }
+
+/* Markdown Styling for AI Responses */
+.markdown-body p {
+  margin-bottom: 0.75rem;
+}
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+.markdown-body ul, .markdown-body ol {
+  margin-left: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+.markdown-body li {
+  margin-bottom: 0.25rem;
+}
