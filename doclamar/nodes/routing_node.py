@@ -94,13 +94,14 @@ def _route_via_index(
             score_threshold=0.10,
         )
 
-        # Filter to root_path if specified
+        # Filter to root_path if specified - STRICT FILTERING (no fallback)
         if root_path and root_path != ".":
             root_abs = os.path.abspath(root_path)
             raw_results = [
                 r for r in raw_results
                 if os.path.abspath(r["file_path"]).startswith(root_abs)
-            ] or raw_results  # if filter leaves nothing, keep all (different root)
+            ]
+            # Removed the 'or raw_results' fallback - we enforce root_path strictly
 
         documents = [
             DocumentSchema(
@@ -210,6 +211,43 @@ def routing_node(state: DoclamarState) -> DoclamarState:
     logger.info("[RoutingNode] Starting...")
 
     try:
+        # Check if candidate_documents are already injected (user provided specific files)
+        injected_docs = state.get("candidate_documents")
+        if injected_docs:
+            logger.info(
+                f"[RoutingNode] Using {len(injected_docs)} pre-injected document(s). "
+                f"Skipping routing search."
+            )
+            
+            elapsed = round(time.time() - t0, 3)
+            timings = dict(state.get("node_timings") or {})
+            timings["routing"] = elapsed
+            
+            search_stats = {
+                "routing_method": "injected",
+                "directories_scanned": 0,
+                "directory_paths": [],
+                "total_files_seen": 0,
+                "files_skipped_wrong_extension": 0,
+                "files_skipped_not_relevant": 0,
+                "files_matched": len(injected_docs),
+                "matched_file_names": [d.get("file_name") for d in injected_docs],
+                "matched_file_paths": [d.get("file_path") for d in injected_docs],
+                "keywords_used": [],
+                "extensions_searched": [],
+                "note": "Using user-selected documents only. No filesystem search performed.",
+            }
+            
+            return {
+                **state,
+                "routing_plan": {"source": "injected_documents"},
+                "candidate_documents": injected_docs,
+                "search_stats": search_stats,
+                "error": None,
+                "node_timings": timings,
+            }
+        
+        # Otherwise, perform normal routing
         plan = _llm_routing_plan(state["query"])
         root_path = state["root_path"]
 

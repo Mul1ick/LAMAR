@@ -13,8 +13,8 @@ from utils.json_utils import extract_json
 
 logger = logging.getLogger(__name__)
 
-CHUNK_SIZE    = 1500
-CHUNK_OVERLAP = 300
+CHUNK_SIZE    = 1200
+CHUNK_OVERLAP = 200
 
 SECTION_PATTERNS = [
     r"^(#{1,4}\s+.+)$",
