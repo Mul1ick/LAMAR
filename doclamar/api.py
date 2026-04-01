@@ -53,9 +53,18 @@ async def process_chat(request: QueryRequest):
 
         # 3. Extract the answer (fallback to an error message if it fails)
         answer = result.get("final_answer") or "I couldn't generate an answer for that."
+        raw_citations = result.get("citations") or []
+
+        formatted_citations = [
+            {"file": c.get("file_name", "Unknown"), "snippet": c.get("preview", "")}
+            for c in raw_citations
+        ]
 
         # 4. Return exactly what your App.jsx expects (data.response)
-        return {"response": answer}
+        return {
+            "response": answer,
+            "citations": formatted_citations
+        }
 
     except Exception as e:
         print(f"❌ Error: {e}")

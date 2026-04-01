@@ -326,6 +326,8 @@ body {
   color: var(--text-primary);
   font-size: 0.95rem;
   max-width: calc(100% - 48px);
+
+  white-space: pre-wrap;
 }
 
 .user-message .message-text {
@@ -379,10 +381,24 @@ body {
 }
 
 .citation-snippet {
-  color: var(--text-primary);
+  /* Make the text slightly softer than the main response */
+  color: var(--text-secondary); 
   line-height: 1.5;
   font-size: 0.85rem;
   white-space: pre-wrap;
+  
+  /* THE FIX: Force long unbroken strings to wrap to the next line */
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  
+  /* STYLING UPGRADE: Add a left border to make it look like a quote */
+  border-left: 2px solid var(--accent-color);
+  padding-left: 0.75rem;
+  margin-top: 0.5rem;
+  
+  /* SPACE SAVER: Keep massive PDF chunks from taking up the whole screen */
+  max-height: 150px;
+  overflow-y: auto;
 }
 
 .message-timestamp {

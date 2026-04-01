@@ -99,6 +99,7 @@ function App() {
             ...conv,
             assistant: {
               text: data.response,
+              citations: data.citations, // <-- ADD THIS LINE
               sender: 'assistant',
               timestamp: new Date().toISOString()
             }
