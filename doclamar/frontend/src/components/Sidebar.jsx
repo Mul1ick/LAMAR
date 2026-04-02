@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-const Sidebar = ({ directory, onDirectorySubmit, isProcessing, savedChats, onLoadChat, onNewChat, currentChatId }) => {
+const Sidebar = ({ directory, onDirectorySubmit, isProcessing, savedChats, onLoadChat, onNewChat, currentChatId,chatMode, activeFile, onReturnToDirectory }) => {
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [directoryInput, setDirectoryInput] = useState('')
   const [fullPath, setFullPath] = useState(null)
@@ -118,6 +118,18 @@ const Sidebar = ({ directory, onDirectorySubmit, isProcessing, savedChats, onLoa
           {!directory && (
             <div className="current-directory-empty">
               <span className="hint">Select a directory to get started</span>
+            </div>
+          )}
+          {chatMode === 'file' && (
+            <div style={{ background: 'rgba(92, 107, 192, 0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--accent-color)', marginTop: '1rem' }}>
+              <h4 style={{ color: 'var(--accent-color)', fontSize: '0.8rem', margin: '0 0 0.5rem 0' }}>LOCKED ON FILE:</h4>
+              <p style={{ fontSize: '0.9rem', marginBottom: '1rem', wordBreak: 'break-all' }}>{activeFile}</p>
+              <button 
+                onClick={onReturnToDirectory}
+                style={{ width: '100%', background: 'transparent', border: '1px solid var(--text-secondary)', color: 'var(--text-primary)', padding: '0.5rem', borderRadius: '4px', cursor: 'pointer' }}
+              >
+                Return to Folder Search
+              </button>
             </div>
           )}
         </div>

@@ -56,7 +56,8 @@ async def process_chat(request: QueryRequest):
         raw_citations = result.get("citations") or []
 
         formatted_citations = [
-            {"file": c.get("file_name", "Unknown"), "snippet": c.get("preview", "")}
+            {"file": c.get("file_name", "Unknown"),"path": c.get("file_path", ""), # <--- ADD THIS LINE,
+            "snippet": c.get("preview", "")}
             for c in raw_citations
         ]
 
@@ -69,6 +70,55 @@ async def process_chat(request: QueryRequest):
     except Exception as e:
         print(f"❌ Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+import uuid
+from chat.document_chat import load_document, chat as doc_chat
+
+# 1. Store active file sessions in memory
+active_sessions = {}
+
+class ChatLoadRequest(BaseModel):
+    file_path: str
+
+class ChatMessageRequest(BaseModel):
+    session_id: str
+    message: str
+
+# 2. Endpoint to load and index a single document
+@app.post("/chat/load")
+async def load_single_doc(request: ChatLoadRequest):
+    try:
+        print(f"📄 Loading specific document: {request.file_path}")
+        session = load_document(request.file_path)
+        session_id = str(uuid.uuid4())
+        active_sessions[session_id] = session
+        return {"session_id": session_id, "file_name": session.file_name}
+    except Exception as e:
+        print(f"❌ Error loading doc: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 3. Endpoint to chat with the loaded document
+@app.post("/chat/message")
+async def doc_message(request: ChatMessageRequest):
+    session = active_sessions.get(request.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session expired or not found")
+    
+    print(f"💬 Chatting with {session.file_name}...")
+    result = doc_chat(session, request.message)
+    
+    # Format citations to match your frontend
+    formatted_citations = [
+        {
+            "file": session.file_name, 
+            "path": session.file_path, 
+            "snippet": c.get("preview", "")
+        }
+        for c in result.get("citations", [])
+    ]
+    
+    return {"response": result["answer"], "citations": formatted_citations}
+
 
 if __name__ == "__main__":
     import uvicorn

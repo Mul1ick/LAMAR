@@ -11,6 +11,54 @@ function App() {
   const [savedChats, setSavedChats] = useState([])
   const [currentChatId, setCurrentChatId] = useState(null)
 
+  const [chatMode, setChatMode] = useState('directory'); // 'directory' or 'file'
+  const [activeFile, setActiveFile] = useState(null);
+  const [sessionId, setSessionId] = useState(null);
+
+  const handleChatWithFile = async (filePath, fileName) => {
+    try {
+      // 1. Tell the backend to load and index the file
+      const response = await fetch("http://127.0.0.1:8000/chat/load", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_path: filePath })
+      });
+      
+      const data = await response.json();
+      
+      // 2. Update state to 'file' mode
+      setSessionId(data.session_id);
+      setActiveFile(fileName);
+      setChatMode('file');
+      
+      // 3. Post a system message to the UI so the user knows it worked
+      setConversations(prev => [...prev, {
+        id: Date.now(),
+        user: { text: `Focus on file: ${fileName}`, sender: 'system', timestamp: new Date().toISOString() },
+        assistant: { 
+          text: `**File Loaded:** I am now answering questions strictly based on the contents of **${fileName}**.`, 
+          citations: null, 
+          sender: 'assistant', 
+          timestamp: new Date().toISOString() 
+        }
+      }]);
+    } catch (error) {
+      console.error("Failed to load file:", error);
+    }
+  };
+
+  // Add a function to return to directory mode
+  const handleReturnToDirectory = () => {
+    setChatMode('directory');
+    setActiveFile(null);
+    setSessionId(null);
+    setConversations(prev => [...prev, {
+      id: Date.now(),
+      user: { text: `Return to directory search`, sender: 'system', timestamp: new Date().toISOString() },
+      assistant: { text: `**Directory Mode:** I am now searching across all files in your selected folder again.`, citations: null, sender: 'assistant', timestamp: new Date().toISOString() }
+    }]);
+  };
+
   const handleDirectorySubmit = (path) => {
     setIsProcessing(true)
     // Here you would integrate with your ML backend to process the directory
@@ -79,13 +127,18 @@ function App() {
 
     try {
       // 2. Call your FastAPI backend
-      const response = await fetch("http://127.0.0.1:8000/chat", {
+      let endpoint = "http://127.0.0.1:8000/chat";
+      let payload = { query: message, directory: directory };
+
+      if (chatMode === 'file' && sessionId) {
+        endpoint = "http://127.0.0.1:8000/chat/message";
+        payload = { message: message, session_id: sessionId };
+      }
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: message,
-          directory: directory // This is the path from your Sidebar [cite: 91]
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) throw new Error("Backend failed");
@@ -151,7 +204,10 @@ function App() {
         currentChatId={currentChatId}
       />
       <main className="main-content">
-        <ChatWindow messages={conversations} />
+        <ChatWindow 
+          messages={conversations} 
+          onChatWithFile={handleChatWithFile} 
+        />
         <QueryInput onSubmit={handleNewMessage} isDisabled={!directory} />
       </main>
     </div>
