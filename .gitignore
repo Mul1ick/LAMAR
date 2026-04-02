@@ -1,2 +1,20 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn.lock
+
+# Vite
+.vite/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.env
+
+# Your case
+doclamar/frontend/node_modules/
+doclamar/frontend/.vite/
+doclamar/venv/
 .env
 /venv
