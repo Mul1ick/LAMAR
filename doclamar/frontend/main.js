@@ -1,11 +1,38 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
+import { spawn } from "child_process"; // <-- Add this import
+import fs from "fs"; // <-- ADD THIS IMPORT
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const isDev = !app.isPackaged;
+
+let backendProcess = null;
+
+function startBackend() {
+  if (isDev) return; 
+
+  const backendPath = path.join(process.resourcesPath, "doclamar-backend", "doclamar-backend");
+  
+  // NEW: Ensure macOS allows the file to be executed
+  try {
+    if (fs.existsSync(backendPath)) {
+      fs.chmodSync(backendPath, '755');
+    }
+  } catch (err) {
+    console.error("Failed to set permissions:", err);
+  }
+
+  backendProcess = spawn(backendPath, [], { 
+    detached: false, 
+    cwd: process.resourcesPath // <-- This tells Python to look here for the .env file!
+  });
+
+  backendProcess.stdout.on('data', (data) => console.log(`Backend: ${data}`));
+  backendProcess.stderr.on('data', (data) => console.error(`Backend Error: ${data}`));
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -29,6 +56,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  startBackend();
   createWindow();
 
   // Handle file dialog
@@ -46,4 +74,10 @@ app.on("activate", () => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on('will-quit', () => {
+  if (backendProcess) {
+    backendProcess.kill();
+  }
 });

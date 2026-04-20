@@ -3,6 +3,55 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from graph.builder import build_graph # ✅ Correctly importing your LangGraph builder
 
+import sqlite3
+import os
+from pathlib import Path
+import uuid
+
+# --- 1. SETUP SAFE PATH FOR DESKTOP DATABASE ---
+# This creates a folder at /Users/aryanmullick/.doclamar/
+HOME_DIR = str(Path.home())
+APP_DIR = os.path.join(HOME_DIR, ".doclamar")
+DB_PATH = os.path.join(APP_DIR, "chats.db")
+
+os.makedirs(APP_DIR, exist_ok=True)
+
+# --- 2. CREATE TABLES ---
+def init_db():
+    print(f"📦 Initializing database at: {DB_PATH}") # <-- Add this log
+    try:    
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # The 'sessions' table holds the sidebar chat list
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # The 'messages' table holds the actual back-and-forth text
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                role TEXT,
+                content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions (id)
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        print("✅ Database tables verified/created.")
+    except Exception as e:
+        print(f"❌ Database init failed: {e}")
+
+# Run this the moment the server boots up
+init_db()
+
 app = FastAPI(title="DocLamar Agent API")
 
 # Allow requests from your Vite frontend
@@ -48,11 +97,26 @@ async def process_chat(request: QueryRequest):
             "node_timings": {},
         }
 
-        # 2. Run the request through your AI pipeline
         result = ai_graph.invoke(initial_state)
-
-        # 3. Extract the answer (fallback to an error message if it fails)
         answer = result.get("final_answer") or "I couldn't generate an answer for that."
+        
+        # --- SAVE TO DB ---
+        # We use a hash of the directory path as a session_id so 
+        # chats in the same folder group together, or just a new UUID.
+        session_id = request.directory.replace("/", "_") 
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('INSERT OR IGNORE INTO sessions (id, title) VALUES (?, ?)', 
+                    (session_id, f"Folder: {os.path.basename(request.directory)}"))
+        
+        cursor.execute('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', 
+                    (session_id, 'user', request.query))
+        cursor.execute('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', 
+                    (session_id, 'ai', answer))
+        conn.commit()
+        conn.close()
+
         raw_citations = result.get("citations") or []
 
         formatted_citations = [
@@ -106,6 +170,24 @@ async def doc_message(request: ChatMessageRequest):
     
     print(f"💬 Chatting with {session.file_name}...")
     result = doc_chat(session, request.message)
+
+    answer = result["answer"]
+
+    # --- SAVE TO DB ---
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Ensure session exists (using the file name as the title)
+    cursor.execute('INSERT OR IGNORE INTO sessions (id, title) VALUES (?, ?)', 
+                  (request.session_id, f"Doc: {session.file_name}"))
+    
+    cursor.execute('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', 
+                  (request.session_id, 'user', request.message))
+    cursor.execute('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', 
+                  (request.session_id, 'ai', answer))
+    
+    conn.commit()
+    conn.close()
     
     # Format citations to match your frontend
     formatted_citations = [
@@ -118,6 +200,49 @@ async def doc_message(request: ChatMessageRequest):
     ]
     
     return {"response": result["answer"], "citations": formatted_citations}
+
+@app.get("/history")
+def get_all_sessions():
+    """Returns a list of all past chats for the sidebar."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row  # Returns dicts instead of tuples
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT * FROM sessions ORDER BY created_at DESC')
+    sessions = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    return {"sessions": sessions}
+
+@app.get("/history/{session_id}")
+def get_session_messages(session_id: str):
+    """Returns all messages for a specific chat."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at ASC', (session_id,))
+    messages = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    return {"messages": messages}
+
+@app.delete("/history/{session_id}")
+def delete_session(session_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        # Delete messages first (foreign key constraint)
+        cursor.execute('DELETE FROM messages WHERE session_id = ?', (session_id,))
+        # Delete the session
+        cursor.execute('DELETE FROM sessions WHERE id = ?', (session_id,))
+        conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

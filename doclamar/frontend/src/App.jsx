@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
 import ChatWindow from './components/ChatWindow'
@@ -8,16 +8,49 @@ function App() {
   const [directory, setDirectory] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const [conversations, setConversations] = useState([])
-  const [savedChats, setSavedChats] = useState([])
-  const [currentChatId, setCurrentChatId] = useState(null)
+  const [currentChatId, setCurrentChatId] = useState(null) // This will now store the SQLite session_id
 
-  const [chatMode, setChatMode] = useState('directory'); // 'directory' or 'file'
+  const [chatMode, setChatMode] = useState('directory'); 
   const [activeFile, setActiveFile] = useState(null);
   const [sessionId, setSessionId] = useState(null);
 
+  // --- 1. LOAD CHAT FROM SQLITE ---
+  const handleLoadChat = async (sessionId) => {
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/history/${sessionId}`);
+      const data = await response.json();
+      
+      // Map SQLite rows to your frontend message format
+      const history = data.messages.map((m, index) => ({
+        id: index,
+        user: m.role === 'user' ? { text: m.content, sender: 'user', timestamp: '' } : null,
+        assistant: m.role === 'ai' ? { text: m.content, sender: 'assistant', timestamp: '' } : null
+      }));
+
+      // Grouping logic: Your UI expects pairs of {user, assistant}
+      // This simple loop groups them into the "conversation" structure your ChatWindow likes
+      const groupedConversations = [];
+      for (let i = 0; i < history.length; i += 2) {
+        groupedConversations.push({
+          id: i,
+          user: history[i]?.user,
+          assistant: history[i+1]?.assistant || { text: "...", sender: 'assistant' }
+        });
+      }
+      
+      setConversations(groupedConversations);
+      setCurrentChatId(sessionId);
+      
+      // Determine if it's a folder or file chat based on ID prefix or metadata
+      // (For now, we default back to directory mode for history viewing)
+      setChatMode('directory'); 
+    } catch (err) {
+      console.error("Failed to load session content:", err);
+    }
+  };
+
   const handleChatWithFile = async (filePath, fileName) => {
     try {
-      // 1. Tell the backend to load and index the file
       const response = await fetch("http://127.0.0.1:8000/chat/load", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -26,12 +59,11 @@ function App() {
       
       const data = await response.json();
       
-      // 2. Update state to 'file' mode
       setSessionId(data.session_id);
+      setCurrentChatId(data.session_id); // Sync with sidebar
       setActiveFile(fileName);
       setChatMode('file');
       
-      // 3. Post a system message to the UI so the user knows it worked
       setConversations(prev => [...prev, {
         id: Date.now(),
         user: { text: `Focus on file: ${fileName}`, sender: 'system', timestamp: new Date().toISOString() },
@@ -47,11 +79,11 @@ function App() {
     }
   };
 
-  // Add a function to return to directory mode
   const handleReturnToDirectory = () => {
     setChatMode('directory');
     setActiveFile(null);
     setSessionId(null);
+    setCurrentChatId(null);
     setConversations(prev => [...prev, {
       id: Date.now(),
       user: { text: `Return to directory search`, sender: 'system', timestamp: new Date().toISOString() },
@@ -60,44 +92,14 @@ function App() {
   };
 
   const handleDirectorySubmit = (path) => {
-    setIsProcessing(true)
-    // Here you would integrate with your ML backend to process the directory
     setDirectory(path)
-    setIsProcessing(false)
   }
 
-  const autoSaveChat = (conversationsToSave) => {
-    try {
-      const existingSavedChats = JSON.parse(localStorage.getItem('savedChats') || '[]')
-      
-      if (currentChatId) {
-        // Update existing chat
-        const chatIndex = existingSavedChats.findIndex(chat => chat.id === currentChatId)
-        if (chatIndex !== -1) {
-          existingSavedChats[chatIndex].conversations = conversationsToSave
-          existingSavedChats[chatIndex].timestamp = new Date().toISOString()
-        }
-      } else {
-        // Create new chat
-        const newChatId = Date.now()
-        setCurrentChatId(newChatId)
-        
-        const chatData = {
-          id: newChatId,
-          title: `Chat - ${new Date().toLocaleString()}`,
-          directory: directory,
-          conversations: conversationsToSave,
-          timestamp: new Date().toISOString()
-        }
-        
-        existingSavedChats.push(chatData)
-      }
-      
-      localStorage.setItem('savedChats', JSON.stringify(existingSavedChats))
-      setSavedChats(existingSavedChats)
-    } catch (error) {
-      console.error('Error auto-saving chat:', error)
-    }
+  const handleNewChat = () => {
+    setConversations([])
+    setCurrentChatId(null)
+    setSessionId(null)
+    // Keep the directory so the user doesn't have to re-select it
   }
 
   const handleNewMessage = async (message) => {
@@ -106,27 +108,16 @@ function App() {
       return
     }
 
-    // 1. Immediately add the user's message to the UI
     const tempId = Date.now();
     const newConversationPair = {
       id: tempId,
-      user: {
-        id: tempId + 1,
-        text: message,
-        sender: 'user',
-        timestamp: new Date().toISOString()
-      },
-      assistant: {
-        text: "Thinking...", // Temporary loading state
-        sender: 'assistant',
-        timestamp: new Date().toISOString()
-      }
+      user: { id: tempId + 1, text: message, sender: 'user', timestamp: new Date().toISOString() },
+      assistant: { text: "Thinking...", sender: 'assistant', timestamp: new Date().toISOString() }
     };
     
     setConversations(prev => [...prev, newConversationPair]);
 
     try {
-      // 2. Call your FastAPI backend
       let endpoint = "http://127.0.0.1:8000/chat";
       let payload = { query: message, directory: directory };
 
@@ -142,17 +133,23 @@ function App() {
       });
 
       if (!response.ok) throw new Error("Backend failed");
-      
       const data = await response.json();
 
-      // 3. Update the conversation with the real AI answer
+      // IMPORTANT: After the first message, the backend generates a session_id.
+      // We should capture it if we aren't already in a session.
+      if (!currentChatId) {
+          // If the backend doesn't return the generated ID, 
+          // we can infer it or update the backend to return it.
+          // For now, let's refresh history after a short delay.
+      }
+
       setConversations(prev => prev.map(conv => {
         if (conv.id === tempId) {
           return {
             ...conv,
             assistant: {
               text: data.response,
-              citations: data.citations, // <-- ADD THIS LINE
+              citations: data.citations,
               sender: 'assistant',
               timestamp: new Date().toISOString()
             }
@@ -160,35 +157,8 @@ function App() {
         }
         return conv;
       }));
-
     } catch (error) {
       console.error("Error communicating with AI backend:", error);
-      // Handle error state in UI
-    }
-  }
-
-  const handleLoadChat = (chat) => {
-    setConversations(chat.conversations)
-    setDirectory(chat.directory)
-    setCurrentChatId(chat.id)
-  }
-
-  const handleNewChat = () => {
-    setConversations([])
-    setCurrentChatId(null)
-    setDirectory('')
-  }
-
-  // Load saved chats on component mount
-  const [isInitialized, setIsInitialized] = useState(false)
-  if (!isInitialized) {
-    try {
-      const existingSavedChats = JSON.parse(localStorage.getItem('savedChats') || '[]')
-      setSavedChats(existingSavedChats)
-      setIsInitialized(true)
-    } catch (error) {
-      console.error('Error loading saved chats:', error)
-      setIsInitialized(true)
     }
   }
 
@@ -198,10 +168,12 @@ function App() {
         directory={directory} 
         onDirectorySubmit={handleDirectorySubmit}
         isProcessing={isProcessing}
-        savedChats={savedChats}
-        onLoadChat={handleLoadChat}
+        onLoadChat={handleLoadChat} // Now takes sessionId
         onNewChat={handleNewChat}
         currentChatId={currentChatId}
+        chatMode={chatMode}
+        activeFile={activeFile}
+        onReturnToDirectory={handleReturnToDirectory}
       />
       <main className="main-content">
         <ChatWindow 

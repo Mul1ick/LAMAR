@@ -13,22 +13,33 @@
     "electron-dev": "concurrently \"npm run dev\" \"npm run start\"",
     "preview": "vite preview"
   },
-  "build": {
-  "appId": "com.example.doclamar",
-  "productName": "DocLamar",
-  "directories": {
-    "output": "release"
+"build": {
+    "appId": "com.example.doclamar",
+    "productName": "DocLamar",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "package.json",
+      "preload.cjs"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/doclamar-backend",
+        "to": "doclamar-backend"
+      },
+      {
+        "from": "../.env", 
+        "to": ".env"
+      }
+    ],
+    "win": {  
+      "target": "nsis",
+      "forceCodeSigning": false  
+    }
   },
-  "files": [
-    "dist/**/*",
-    "main.js",
-    "package.json"
-  ],
-  "win": {  
-    "target": "nsis",
-    "forceCodeSigning": false  
-  }
-},
   "dependencies": {
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
