@@ -18,12 +18,13 @@ os.makedirs(APP_DIR, exist_ok=True)
 
 # --- 2. CREATE TABLES ---
 def init_db():
-    print(f"📦 Initializing database at: {DB_PATH}") # <-- Add this log
-    try:    
+    print(f"Initializing database at: {DB_PATH}") 
+    try:
+        os.makedirs(APP_DIR, exist_ok=True)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # The 'sessions' table holds the sidebar chat list
+        # 1. Create tables if they don't exist
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
@@ -32,7 +33,16 @@ def init_db():
             )
         ''')
         
-        # The 'messages' table holds the actual back-and-forth text
+        # --- NEW: AUTO-MIGRATION LOGIC ---
+        # 2. Check if the 'username' column exists. If not, add it!
+        cursor.execute("PRAGMA table_info(sessions)")
+        columns = [info[1] for info in cursor.fetchall()]
+        
+        if 'username' not in columns:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN username TEXT DEFAULT 'guest'")
+            print("Database upgraded: Added multi-user support.")
+        # ---------------------------------
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,12 +53,13 @@ def init_db():
                 FOREIGN KEY (session_id) REFERENCES sessions (id)
             )
         ''')
+        
         conn.commit()
-        conn.close()
-        print("✅ Database tables verified/created.")
+        print("Database tables verified/created.")
     except Exception as e:
-        print(f"❌ Database init failed: {e}")
-
+        print(f"Database init failed: {e}")
+    finally:
+        conn.close()
 # Run this the moment the server boots up
 init_db()
 
@@ -66,6 +77,8 @@ app.add_middleware(
 class QueryRequest(BaseModel):
     query: str
     directory: str
+    username: str = "guest" # <-- NEW
+    session_id: str
 
 # Initialize the AI graph once when the server starts
 ai_graph = build_graph()
@@ -103,17 +116,18 @@ async def process_chat(request: QueryRequest):
         # --- SAVE TO DB ---
         # We use a hash of the directory path as a session_id so 
         # chats in the same folder group together, or just a new UUID.
-        session_id = request.directory.replace("/", "_") 
         
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute('INSERT OR IGNORE INTO sessions (id, title) VALUES (?, ?)', 
-                    (session_id, f"Folder: {os.path.basename(request.directory)}"))
+        cursor.execute('''
+        INSERT OR IGNORE INTO sessions (id, title, username) 
+        VALUES (?, ?, ?)
+    ''', (request.session_id, f"Folder: {os.path.basename(request.directory)}", request.username))
         
         cursor.execute('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', 
-                    (session_id, 'user', request.query))
+                    (request.session_id, 'user', request.query))
         cursor.execute('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', 
-                    (session_id, 'ai', answer))
+                    (request.session_id, 'ai', answer))
         conn.commit()
         conn.close()
 
@@ -128,7 +142,8 @@ async def process_chat(request: QueryRequest):
         # 4. Return exactly what your App.jsx expects (data.response)
         return {
             "response": answer,
-            "citations": formatted_citations
+            "citations": formatted_citations,
+            "session_id": request.session_id
         }
 
     except Exception as e:
@@ -147,6 +162,7 @@ class ChatLoadRequest(BaseModel):
 class ChatMessageRequest(BaseModel):
     session_id: str
     message: str
+    username: str = "guest" # <-- NEW
 
 # 2. Endpoint to load and index a single document
 @app.post("/chat/load")
@@ -178,8 +194,10 @@ async def doc_message(request: ChatMessageRequest):
     cursor = conn.cursor()
     
     # Ensure session exists (using the file name as the title)
-    cursor.execute('INSERT OR IGNORE INTO sessions (id, title) VALUES (?, ?)', 
-                  (request.session_id, f"Doc: {session.file_name}"))
+    cursor.execute('''
+        INSERT OR IGNORE INTO sessions (id, title, username) 
+        VALUES (?, ?, ?)
+    ''', (request.session_id, f"Doc: {session.file_name}", request.username))
     
     cursor.execute('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', 
                   (request.session_id, 'user', request.message))
@@ -202,13 +220,15 @@ async def doc_message(request: ChatMessageRequest):
     return {"response": result["answer"], "citations": formatted_citations}
 
 @app.get("/history")
-def get_all_sessions():
-    """Returns a list of all past chats for the sidebar."""
+def get_all_sessions(username: str = "guest"): # <-- Add parameter here
+    """Returns a list of all past chats for the specific user."""
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # Returns dicts instead of tuples
+    conn.row_factory = sqlite3.Row  
     cursor = conn.cursor()
     
-    cursor.execute('SELECT * FROM sessions ORDER BY created_at DESC')
+    # Filter by username!
+    cursor.execute('SELECT * FROM sessions WHERE username = ? ORDER BY created_at DESC', (username,))
+    
     sessions = [dict(row) for row in cursor.fetchall()]
     conn.close()
     
@@ -221,7 +241,7 @@ def get_session_messages(session_id: str):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
-    cursor.execute('SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at ASC', (session_id,))
+    cursor.execute('SELECT role, content, created_at FROM messages WHERE session_id = ? ORDER BY created_at ASC', (session_id,))
     messages = [dict(row) for row in cursor.fetchall()]
     conn.close()
     
@@ -244,6 +264,9 @@ def delete_session(session_id: str):
     finally:
         conn.close()
 
+@app.get("/health")
+def health_check():
+    return {"status": "ready"}
 
 if __name__ == "__main__":
     import uvicorn

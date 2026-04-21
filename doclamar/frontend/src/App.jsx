@@ -3,8 +3,31 @@ import './App.css'
 import Sidebar from './components/Sidebar'
 import ChatWindow from './components/ChatWindow'
 import QueryInput from './components/QueryInput'
+import Login from './components/Login'   // <-- Import new component
+import Home from './components/Home'     // <-- Import new component
+
+export const parseDBDate = (dateString) => {
+  if (!dateString) return new Date().toISOString();
+  // Replaces the space with a 'T' and appends 'Z' for UTC time
+  const safeDateString = dateString.replace(' ', 'T') + 'Z';
+  return new Date(safeDateString).toISOString();
+};
 
 function App() {
+  const savedName = localStorage.getItem('doclamar_username');
+  const savedView = localStorage.getItem('doclamar_view');
+  
+  // If there's a name, use the saved view (or default to 'home'). If no name, force 'login'.
+  const initialView = savedName ? (savedView || 'home') : 'login';
+  const [currentView, setCurrentView] = useState(initialView); // 'login', 'home', 'app'
+
+  useEffect(() => {
+    // Whenever currentView changes, save it to memory
+    localStorage.setItem('doclamar_view', currentView);
+  }, [currentView]);
+  
+  const [username, setUsername] = useState('');
+  const [isBackendReady, setIsBackendReady] = useState(false);
   const [directory, setDirectory] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const [conversations, setConversations] = useState([])
@@ -12,42 +35,63 @@ function App() {
 
   const [chatMode, setChatMode] = useState('directory'); 
   const [activeFile, setActiveFile] = useState(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [sessionId, setSessionId] = useState(null);
+
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const res = await fetch("http://127.0.0.1:8000/health");
+        if (res.ok) setIsBackendReady(true);
+      } catch (e) {
+        // Backend not ready yet, silently try again in 2 seconds
+        setTimeout(checkHealth, 2000);
+      }
+    };
+    checkHealth();
+  }, []);
 
   // --- 1. LOAD CHAT FROM SQLITE ---
   const handleLoadChat = async (sessionId) => {
-    try {
-      const response = await fetch(`http://127.0.0.1:8000/history/${sessionId}`);
-      const data = await response.json();
-      
-      // Map SQLite rows to your frontend message format
-      const history = data.messages.map((m, index) => ({
-        id: index,
-        user: m.role === 'user' ? { text: m.content, sender: 'user', timestamp: '' } : null,
-        assistant: m.role === 'ai' ? { text: m.content, sender: 'assistant', timestamp: '' } : null
-      }));
+  try {
+    const response = await fetch(`http://127.0.0.1:8000/history/${sessionId}`);
+    const data = await response.json();
+    
+    const dbMessages = data.messages;
+    const pairedConversations = [];
 
-      // Grouping logic: Your UI expects pairs of {user, assistant}
-      // This simple loop groups them into the "conversation" structure your ChatWindow likes
-      const groupedConversations = [];
-      for (let i = 0; i < history.length; i += 2) {
-        groupedConversations.push({
-          id: i,
-          user: history[i]?.user,
-          assistant: history[i+1]?.assistant || { text: "...", sender: 'assistant' }
+    // Using a for-loop instead of .map() to safely group pairs
+    for (let i = 0; i < dbMessages.length; i++) {
+      const msg = dbMessages[i]; // <-- msg is explicitly defined right here
+
+      if (msg.role === 'user') {
+        pairedConversations.push({
+          id: Date.now() + i,
+          user: { 
+            text: msg.content, 
+            sender: 'user', 
+            timestamp: parseDBDate(msg.created_at) 
+          },
+          assistant: null // Temporary placeholder until the AI response loops around
         });
+      } else if (msg.role === 'ai' && pairedConversations.length > 0) {
+        // Attach the AI response to the last created user pair
+        pairedConversations[pairedConversations.length - 1].assistant = {
+          text: msg.content,
+          sender: 'assistant',
+          timestamp: parseDBDate(msg.created_at), 
+          citations: [] 
+        };
       }
-      
-      setConversations(groupedConversations);
-      setCurrentChatId(sessionId);
-      
-      // Determine if it's a folder or file chat based on ID prefix or metadata
-      // (For now, we default back to directory mode for history viewing)
-      setChatMode('directory'); 
-    } catch (err) {
-      console.error("Failed to load session content:", err);
     }
-  };
+    
+    setConversations(pairedConversations);
+    setCurrentChatId(sessionId);
+    setChatMode('directory'); 
+  } catch (err) {
+    console.error("Failed to load session content:", err);
+  }
+};
 
   const handleChatWithFile = async (filePath, fileName) => {
     try {
@@ -109,6 +153,9 @@ function App() {
     }
 
     const tempId = Date.now();
+    // 👇 NEW: Decide the Session ID BEFORE calling the backend
+    const targetSessionId = currentChatId || `session_${tempId}`;
+
     const newConversationPair = {
       id: tempId,
       user: { id: tempId + 1, text: message, sender: 'user', timestamp: new Date().toISOString() },
@@ -119,11 +166,16 @@ function App() {
 
     try {
       let endpoint = "http://127.0.0.1:8000/chat";
-      let payload = { query: message, directory: directory };
+      let payload = { 
+        query: message, 
+        directory: directory,
+        username: username,
+        session_id: targetSessionId // <--- 👇 ADD IT TO THE PAYLOAD
+      };
 
       if (chatMode === 'file' && sessionId) {
         endpoint = "http://127.0.0.1:8000/chat/message";
-        payload = { message: message, session_id: sessionId };
+        payload = { message: message, session_id: sessionId, username: username };
       }
 
       const response = await fetch(endpoint, {
@@ -135,12 +187,10 @@ function App() {
       if (!response.ok) throw new Error("Backend failed");
       const data = await response.json();
 
-      // IMPORTANT: After the first message, the backend generates a session_id.
-      // We should capture it if we aren't already in a session.
+      // 👇 Update this block to use your targetSessionId
       if (!currentChatId) {
-          // If the backend doesn't return the generated ID, 
-          // we can infer it or update the backend to return it.
-          // For now, let's refresh history after a short delay.
+          setCurrentChatId(targetSessionId); 
+          setRefreshTrigger(prev => prev + 1);
       }
 
       setConversations(prev => prev.map(conv => {
@@ -162,6 +212,21 @@ function App() {
     }
   }
 
+  if (currentView === 'login') {
+    return <Login onLogin={(name) => {
+      setUsername(name);
+      setCurrentView('home');
+    }} />;
+  }
+
+  if (currentView === 'home') {
+    return <Home 
+      username={username} 
+      isBackendReady={isBackendReady} 
+      onEnterApp={() => setCurrentView('app')} 
+    />;
+  }
+
   return (
     <div className="app-container">
       <Sidebar 
@@ -174,6 +239,8 @@ function App() {
         chatMode={chatMode}
         activeFile={activeFile}
         onReturnToDirectory={handleReturnToDirectory}
+        refreshTrigger={refreshTrigger}
+        username={username} 
       />
       <main className="main-content">
         <ChatWindow 
