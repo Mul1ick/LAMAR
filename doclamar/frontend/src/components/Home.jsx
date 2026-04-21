@@ -1,6 +1,8 @@
 import React from 'react';
 
 const Home = ({ username, onEnterApp, isBackendReady }) => {
+
+    
   return (
     <div className="fullscreen-view" style={{ padding: '50px', height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px' }}>

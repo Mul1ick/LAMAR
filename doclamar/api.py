@@ -2,11 +2,37 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from graph.builder import build_graph # ✅ Correctly importing your LangGraph builder
+from main import run_index_manager 
+import threading
 
 import sqlite3
 import os
 from pathlib import Path
 import uuid
+
+import logging
+from logging.handlers import RotatingFileHandler
+import os
+
+# 1. Define where the logs will live (same folder as your database)
+APP_DIR = os.path.expanduser("~/.doclamar")
+os.makedirs(APP_DIR, exist_ok=True)
+LOG_FILE = os.path.join(APP_DIR, "doclamar.log")
+
+# 2. Configure the logging system
+logging.basicConfig(
+    level=logging.INFO, # Change to logging.DEBUG if you want crazy detail
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        # Auto-rotates the file when it hits 5MB, keeps 2 backups max
+        RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=2),
+        # Also print to the terminal so you can still see it in Dev Mode
+        logging.StreamHandler() 
+    ]
+)
+
+# 3. Create the logger object you will use throughout your code
+logger = logging.getLogger("doclamar")
 
 # --- 1. SETUP SAFE PATH FOR DESKTOP DATABASE ---
 # This creates a folder at /Users/aryanmullick/.doclamar/
@@ -18,7 +44,7 @@ os.makedirs(APP_DIR, exist_ok=True)
 
 # --- 2. CREATE TABLES ---
 def init_db():
-    print(f"Initializing database at: {DB_PATH}") 
+    logger.info(f"Initializing database at: {DB_PATH}")
     try:
         os.makedirs(APP_DIR, exist_ok=True)
         conn = sqlite3.connect(DB_PATH)
@@ -40,7 +66,7 @@ def init_db():
         
         if 'username' not in columns:
             cursor.execute("ALTER TABLE sessions ADD COLUMN username TEXT DEFAULT 'guest'")
-            print("Database upgraded: Added multi-user support.")
+            logger.info("Database upgraded: Added multi-user support.")
         # ---------------------------------
 
         cursor.execute('''
@@ -55,9 +81,9 @@ def init_db():
         ''')
         
         conn.commit()
-        print("Database tables verified/created.")
+        logger.info("Database tables verified/created.")
     except Exception as e:
-        print(f"Database init failed: {e}")
+        logger.error(f"Database init failed: {e}", exc_info=True)
     finally:
         conn.close()
 # Run this the moment the server boots up
@@ -147,7 +173,7 @@ async def process_chat(request: QueryRequest):
         }
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logger.error(f"❌ Chat processing failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 import uuid
@@ -168,13 +194,13 @@ class ChatMessageRequest(BaseModel):
 @app.post("/chat/load")
 async def load_single_doc(request: ChatLoadRequest):
     try:
-        print(f"📄 Loading specific document: {request.file_path}")
+        logger.info(f"📄 Loading specific document: {request.file_path}")
         session = load_document(request.file_path)
         session_id = str(uuid.uuid4())
         active_sessions[session_id] = session
         return {"session_id": session_id, "file_name": session.file_name}
     except Exception as e:
-        print(f"❌ Error loading doc: {e}")
+        logger.error(f"❌ Error loading doc: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 # 3. Endpoint to chat with the loaded document
@@ -184,7 +210,7 @@ async def doc_message(request: ChatMessageRequest):
     if not session:
         raise HTTPException(status_code=404, detail="Session expired or not found")
     
-    print(f"💬 Chatting with {session.file_name}...")
+    logger.info(f"💬 Chatting with {session.file_name}...")
     result = doc_chat(session, request.message)
 
     answer = result["answer"]
@@ -257,9 +283,11 @@ def delete_session(session_id: str):
         # Delete the session
         cursor.execute('DELETE FROM sessions WHERE id = ?', (session_id,))
         conn.commit()
+        logger.info(f"🗑️ Successfully deleted chat session: {session_id}")
         return {"status": "success"}
     except Exception as e:
         conn.rollback()
+        logger.error(f"❌ Failed to delete session {session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
@@ -267,6 +295,29 @@ def delete_session(session_id: str):
 @app.get("/health")
 def health_check():
     return {"status": "ready"}
+
+
+@app.post("/index/start")
+async def trigger_indexing(request: QueryRequest):
+    """
+    Triggers the run_index_manager logic for a specific directory.
+    We run it in a background thread so the UI doesn't freeze.
+    """
+    logger.info(f"🛠️ Starting manual indexing for: {request.directory}")
+    
+    def background_indexing():
+        try:
+            # This calls your actual main.py logic
+            run_index_manager(request.directory) 
+            logger.info(f"✅ Indexing completed successfully for {request.directory}")
+        except Exception as e:
+            logger.error(f"❌ Manual indexing failed: {e}", exc_info=True)
+
+    # Start the thread
+    thread = threading.Thread(target=background_indexing)
+    thread.start()
+    
+    return {"status": "indexing_started", "message": "The engine is now indexing your files."}
 
 if __name__ == "__main__":
     import uvicorn

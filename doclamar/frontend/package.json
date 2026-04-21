@@ -34,7 +34,11 @@
         "from": "../.env", 
         "to": ".env"
       }
+      
     ],
+    "mac": {
+      "target": ["dir"] 
+    },
     "win": {  
       "target": "nsis",
       "forceCodeSigning": false  

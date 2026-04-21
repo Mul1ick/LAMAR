@@ -16,6 +16,7 @@ export const parseDBDate = (dateString) => {
 function App() {
   const savedName = localStorage.getItem('doclamar_username');
   const savedView = localStorage.getItem('doclamar_view');
+  console.log("Memory Check on Refresh -> Name:", savedName, "| View:", savedView);
   
   // If there's a name, use the saved view (or default to 'home'). If no name, force 'login'.
   const initialView = savedName ? (savedView || 'home') : 'login';
@@ -25,7 +26,7 @@ function App() {
     // Whenever currentView changes, save it to memory
     localStorage.setItem('doclamar_view', currentView);
   }, [currentView]);
-  
+
   const [username, setUsername] = useState('');
   const [isBackendReady, setIsBackendReady] = useState(false);
   const [directory, setDirectory] = useState('')
@@ -212,21 +213,35 @@ function App() {
     }
   }
 
-  if (currentView === 'login') {
+  const handleLogout = () => {
+    // 1. Wipe the browser's memory
+    localStorage.removeItem('doclamar_username');
+    localStorage.removeItem('doclamar_view');
+    
+    // 2. Reset the React state
+    setUsername('');
+    setCurrentView('login');
+  };
+
+if (currentView === 'login') {
     return <Login onLogin={(name) => {
+      // 👇 ADD THIS LINE 👇
+      localStorage.setItem('doclamar_username', name); 
+      
       setUsername(name);
       setCurrentView('home');
     }} />;
   }
 
+  // And while you're here, add your logout function to the Home screen!
   if (currentView === 'home') {
     return <Home 
       username={username} 
       isBackendReady={isBackendReady} 
       onEnterApp={() => setCurrentView('app')} 
+      onLogout={handleLogout} // <--- Don't forget this if you added the logout function!
     />;
   }
-
   return (
     <div className="app-container">
       <Sidebar 
